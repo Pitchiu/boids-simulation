@@ -1,0 +1,6 @@
+*.vcxproj
+*.filters
+*.user
+
+# Build directory
+x64
