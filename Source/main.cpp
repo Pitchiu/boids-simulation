@@ -21,11 +21,41 @@ constexpr size_t boids_size = 1000;
 typedef std::vector<int> IntVector;
 typedef std::array<float, boids_size> FloatArray;
 
-
-struct triangle
+struct Positions
 {
-    float p1_x, p1_y, p2_x, p2_y, p3_x, p3_y;
+    float x[boids_size];
+    float y[boids_size];
 };
+
+struct Velocities
+{
+    float vx[boids_size];
+    float vy[boids_size];
+};
+
+struct TrianglePositions
+{
+    float p1_x;
+    float p1_y;
+    float p2_x;
+    float p2_y;
+    float p3_x;
+    float p3_y;
+    //float p1_x[boids_size];
+    //float p1_y[boids_size];
+    //float p2_x[boids_size];
+    //float p2_y[boids_size];
+    //float p3_x[boids_size];
+    //float p3_y[boids_size];
+};
+
+struct Boids
+{
+    Positions positions;
+    Velocities velocities;
+    TrianglePositions trianglePositions[boids_size];
+};
+
 
 std::string vertexShader =
 "#version 330 core\n"
@@ -84,16 +114,15 @@ static auto exception_handler = [](sycl::exception_list e_list) {
 };
 
 
-void RenderFrame(queue& q, range<1> &num_items,
-    float* gpu_x, float* gpu_y, float* gpu_vx, float* gpu_vy, float* gpu_p1_x, float* gpu_p1_y, float* gpu_p2_x, float* gpu_p2_y, float* gpu_p3_x, float* gpu_p3_y)
+void RenderFrame(queue& q, range<1> &num_items, Boids* boids)
 {
     q.submit([&](handler& h) {
 
     h.parallel_for(num_items, [=](auto i) {
-    float x = gpu_x[i];
-    float y = gpu_y[i];
-    float vx = gpu_vx[i];
-    float vy = gpu_vy[i];
+    float x = boids->positions.x[i];
+    float y = boids->positions.y[i];
+    float vx = boids->velocities.vx[i];
+    float vy = boids->velocities.vy[i];
 
     auto distance = [&](float x1, float y1, float x2, float y2)
     {
@@ -115,14 +144,14 @@ void RenderFrame(queue& q, range<1> &num_items,
     for (int j = 0; j < boids_size; j++)
     {
         if (j == i) continue;
-        float friend_x = gpu_x[j];
-        float friend_y = gpu_y[j];
+        float friend_x = boids->positions.x[j];
+        float friend_y = boids->positions.y[j];
         float dist = distance(x, y, friend_x, friend_y);
         if (dist > visual_range)
             continue;
 
-        float friend_vx = gpu_vx[j];
-        float friend_vy = gpu_vy[j];
+        float friend_vx = boids->velocities.vx[j];
+        float friend_vy = boids->velocities.vy[j];
 
         if (dist < protected_range)
         {
@@ -182,57 +211,55 @@ void RenderFrame(queue& q, range<1> &num_items,
     }
 
     //fill the triangle
-    float vp_x = -gpu_vy[i];
-    float vp_y = gpu_vx[i];
+    float vp_x = -boids->velocities.vy[i];
+    float vp_y = boids->velocities.vx[i];
     float scale = 2 / sqrt(vp_x * vp_x + vp_y * vp_y);
     vp_x *= scale;
     vp_y *= scale;
 
     // update velocity
-    gpu_vx[i] = vx;
-    gpu_vy[i] = vy;
+    boids->velocities.vx[i] = vx;
+    boids->velocities.vy[i] = vy;
 
     // update position
     float new_x = x + vx;
     float new_y = y + vy;
-    gpu_x[i] = new_x;
-    gpu_y[i] = new_y;
+    boids->positions.x[i] = new_x;
+    boids->positions.y[i] = new_y;
 
 
-    gpu_p1_x[i] = new_x + vp_x;
-    gpu_p1_y[i] = new_y + vp_y;
-    gpu_p2_x[i] = new_x - vp_x;
-    gpu_p2_y[i] = new_y - vp_y;
-    gpu_p3_x[i] = new_x + vx * scale * 2.5;
-    gpu_p3_y[i] = new_y + vy * scale * 2.5;
+    boids->trianglePositions[i].p1_x = new_x + vp_x;
+    boids->trianglePositions[i].p1_y = new_y + vp_y;
+    boids->trianglePositions[i].p2_x = new_x - vp_x;
+    boids->trianglePositions[i].p2_y = new_y - vp_y;
+    boids->trianglePositions[i].p3_x = new_x + vx * scale * 2.5;
+    boids->trianglePositions[i].p3_y = new_y + vy * scale * 2.5;
         });
         });
 }
 
-void InitializeInput(FloatArray &cpu_x, FloatArray &cpu_y,FloatArray &cpu_vx,FloatArray &cpu_vy,FloatArray &cpu_p1_x,
-FloatArray &cpu_p1_y, FloatArray &cpu_p2_x,FloatArray &cpu_p2_y,FloatArray &cpu_p3_x,FloatArray &cpu_p3_y)
+void InitializeInput(Boids &boids)
 {
     srand(time(NULL));
     for (size_t i = 0; i < boids_size; i++)
     {
-        cpu_x[i] = rand() % static_cast<int>(windowWidth - margin * 2) + margin;
-        cpu_y[i] = rand() % static_cast<int>(windowHeight - margin * 2) + margin;
+        boids.positions.x[i] = rand() % static_cast<int>(windowWidth - margin * 2) + margin;
+        boids.positions.y[i] = rand() % static_cast<int>(windowHeight - margin * 2) + margin;
         float randAngle = (static_cast <float> (rand()) / static_cast <float> (RAND_MAX)) * 3.141592653589 * 2;
-        cpu_vx[i] = minspeed * cos(randAngle);
-        cpu_vy[i] = minspeed * sin(randAngle);
-        float vp_x = -cpu_vy[i];
-        float vp_y = cpu_vx[i];
+        boids.velocities.vx[i] = minspeed * cos(randAngle);
+        boids.velocities.vy[i] = minspeed * sin(randAngle);
+        float vp_x = -boids.velocities.vy[i];
+        float vp_y = boids.velocities.vx[i];
         float scale = 2 / sqrt(vp_x * vp_x + vp_y * vp_y);
         vp_x *= scale;
         vp_y *= scale;
         
-        cpu_p1_x[i] = cpu_x[i] + vp_x;
-        cpu_p1_y[i] = cpu_y[i] + vp_y;
-        cpu_p2_x[i] = cpu_x[i] - vp_x;
-        cpu_p2_y[i] = cpu_y[i] - vp_y;
-        cpu_p3_x[i] = cpu_x[i] + cpu_vx[i] * scale * 2.5;
-        cpu_p3_y[i] = cpu_y[i] + cpu_vy[i] * scale * 2.5;
-
+        boids.trianglePositions[i].p1_x = boids.positions.x[i] + vp_x;
+        boids.trianglePositions[i].p1_y = boids.positions.y[i] + vp_y;
+        boids.trianglePositions[i].p2_x = boids.positions.x[i] - vp_x;
+        boids.trianglePositions[i].p2_y = boids.positions.y[i] - vp_y;
+        boids.trianglePositions[i].p3_x = boids.positions.x[i] + boids.velocities.vx[i] * scale * 2.5;
+        boids.trianglePositions[i].p3_y = boids.positions.y[i] + boids.velocities.vy[i] * scale * 2.5;
     }
 }
 
@@ -326,113 +353,48 @@ int main(int argc, char* argv[]) {
     int location = glGetUniformLocation(shader, "u_MVP");
     glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(proj));
 
+    Boids cpu_boids;
 
-    FloatArray cpu_x;
-    FloatArray cpu_y;
-    FloatArray cpu_vx;
-    FloatArray cpu_vy;
-    FloatArray cpu_p1_x;
-    FloatArray cpu_p1_y;
-    FloatArray cpu_p2_x;
-    FloatArray cpu_p2_y;
-    FloatArray cpu_p3_x;
-    FloatArray cpu_p3_y;
     //CPUBoids cpu_boids;
-    InitializeInput(cpu_x,cpu_y,cpu_vx,cpu_vy, cpu_p1_x, cpu_p1_y,cpu_p2_x,cpu_p2_y,cpu_p3_x,cpu_p3_y);
+    InitializeInput(cpu_boids);
 
     // Copy all buffers to GPU memory
-    float *gpu_x = malloc_device<float>(boids_size, q);
-    float *gpu_y = malloc_device<float>(boids_size, q);
-    float* gpu_vx = malloc_device<float>(boids_size, q);
-    float* gpu_vy = malloc_device<float>(boids_size, q);
-    float* gpu_p1_x = malloc_device<float>(boids_size, q);
-    float* gpu_p1_y = malloc_device<float>(boids_size, q);
-    float* gpu_p2_x = malloc_device<float>(boids_size, q);
-    float* gpu_p2_y = malloc_device<float>(boids_size, q);
-    float* gpu_p3_x = malloc_device<float>(boids_size, q);
-    float* gpu_p3_y = malloc_device<float>(boids_size, q);
+    Boids *gpu_boids = (Boids*)malloc_device(boids_size*10*sizeof(float), q);
 
     q.submit([&](handler& h) {
-        h.memcpy(gpu_x, &cpu_x[0], boids_size * sizeof(float));}).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_y, &cpu_y[0], boids_size * sizeof(float)); }).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_vx, &cpu_vx[0], boids_size * sizeof(float)); }).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_vy, &cpu_vy[0], boids_size * sizeof(float)); }).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_p1_x, &cpu_p1_x[0], boids_size * sizeof(float)); }).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_p1_y, &cpu_p1_y[0], boids_size * sizeof(float)); }).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_p2_x, &cpu_p2_x[0], boids_size * sizeof(float)); }).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_p2_y, &cpu_p2_y[0], boids_size * sizeof(float)); }).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_p3_x, &cpu_p3_x[0], boids_size * sizeof(float)); }).wait();
-    q.submit([&](handler& h) {
-        h.memcpy(gpu_p3_y, &cpu_p3_y[0], boids_size * sizeof(float)); }).wait();
+        h.memcpy(gpu_boids, &cpu_boids, sizeof(Boids));}).wait();
 
-    //temporary triangle vector TODO: delete it
-    std::array<triangle, boids_size> triangles;
-    int frame = 0, time, timebase = 0;
+    double lastTime = glfwGetTime();
+    int nbFrames = 0;
 
     while (!glfwWindowShouldClose(window))
     {
-        glClear(GL_COLOR_BUFFER_BIT);
-        for (int i = 0; i < boids_size; i++)
-        {
-            triangles[i].p1_x = cpu_p1_x[i];
-            triangles[i].p1_y = cpu_p1_y[i];
-            triangles[i].p2_x = cpu_p2_x[i];
-            triangles[i].p2_y = cpu_p2_y[i];
-            triangles[i].p3_x = cpu_p3_x[i];
-            triangles[i].p3_y = cpu_p3_y[i];
+        double currentTime = glfwGetTime();
+        nbFrames++;
+        if (currentTime - lastTime >= 1.0) { // If last prinf() was more than 1 sec ago
+            //printf("%f ms/frame\n", 1000.0 / double(nbFrames));
+            printf("%d FPS\n", nbFrames);
+            nbFrames = 0;
+            lastTime += 1.0;
+        }
 
-        }
+        glClear(GL_COLOR_BUFFER_BIT);
         //schedule frame to render
-        RenderFrame(q, num_items, gpu_x, gpu_y, gpu_vx, gpu_vy, gpu_p1_x, gpu_p1_y, gpu_p2_x, gpu_p2_y, gpu_p3_x, gpu_p3_y);
+        RenderFrame(q, num_items, gpu_boids);
         //draw
-        glBufferData(GL_ARRAY_BUFFER, boids_size * sizeof(triangle), &(triangles[0]), GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, boids_size * sizeof(float)*6, &(cpu_boids.trianglePositions), GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLES, 0, boids_size * 3);
-        //fps counter
-        frame++;
-        time = glfwGetTime();
-        if (time - timebase > 1000) {
-            std::cout << "FPS: " << frame * 1000.0 / (time - timebase) <<std::endl;;
-            timebase = time;
-            frame = 0;
-        }
         glfwSwapBuffers(window);
         glfwPollEvents();
 
         //wait until frame is rendered and copy rendered frame to host
         q.wait();
         q.submit([&](handler& h) {
-            h.memcpy(&cpu_p1_x[0], gpu_p1_x,boids_size * sizeof(float));}).wait();
-        q.submit([&](handler& h) {
-            h.memcpy(&cpu_p1_y[0], gpu_p1_y,boids_size * sizeof(float)); }).wait();
-        q.submit([&](handler& h) {
-            h.memcpy(&cpu_p2_x[0], gpu_p2_x,boids_size * sizeof(float)); }).wait();
-        q.submit([&](handler& h) {
-            h.memcpy(&cpu_p2_y[0], gpu_p2_y, boids_size * sizeof(float)); }).wait();
-        q.submit([&](handler& h) {
-            h.memcpy(&cpu_p3_x[0], gpu_p3_x, boids_size * sizeof(float)); }).wait();
-        q.submit([&](handler& h) {
-            h.memcpy(&cpu_p3_y[0], gpu_p3_y, boids_size * sizeof(float)); }).wait();
+            h.memcpy(&(cpu_boids.trianglePositions), &(gpu_boids->trianglePositions),boids_size * sizeof(float)*6);}).wait();
     }
     glfwTerminate();
 
-    free(gpu_x, q);
-    free(gpu_y, q);
-    free(gpu_vx, q);
-    free(gpu_vy, q);
-    free(gpu_p1_x, q);
-    free(gpu_p1_y, q);
-    free(gpu_p2_x, q);
-    free(gpu_p2_y, q);
-    free(gpu_p3_x, q);
-    free(gpu_p3_y, q);
+    free(gpu_boids, q);
 
     return 0;
 }
