@@ -16,7 +16,8 @@
 
 using namespace sycl;
 
-constexpr size_t boids_size = 1000;
+constexpr size_t boids_size = 8192;
+
 
 typedef std::vector<int> IntVector;
 typedef std::array<float, boids_size> FloatArray;
@@ -41,12 +42,6 @@ struct TrianglePositions
     float p2_y;
     float p3_x;
     float p3_y;
-    //float p1_x[boids_size];
-    //float p1_y[boids_size];
-    //float p2_x[boids_size];
-    //float p2_y[boids_size];
-    //float p3_x[boids_size];
-    //float p3_y[boids_size];
 };
 
 struct Boids
@@ -55,6 +50,25 @@ struct Boids
     Velocities velocities;
     TrianglePositions trianglePositions[boids_size];
 };
+
+struct IDPair
+{
+    int id;
+    int cellId;
+};
+
+//struct SortArrays
+//{
+//    int flags[boids_size];
+//    int I_down[boids_size];
+//    int I_up[boids_size];
+//    int index[boids_size];
+//};
+//
+//struct Indexes
+//{
+//    int j, bits, d;
+//};
 
 
 std::string vertexShader =
@@ -92,6 +106,16 @@ constexpr float minspeed = 0.9f;
 constexpr float windowWidth = 1600.0f;  // 1920
 constexpr float windowHeight = 900.0f;  // 1080
 
+constexpr int   cellsInRow = (windowWidth / visual_range);
+constexpr int   cellsInColumn = (windowHeight / visual_range);
+constexpr int   cellsNum = cellsInRow * cellsInColumn;
+
+
+constexpr unsigned countBits(unsigned int number)
+{
+    return (int)log2(number) + 1;
+}
+
 constexpr float margin = 200.0f;
 constexpr float leftmargin = margin;
 constexpr float rightmargin = windowWidth - margin;
@@ -113,23 +137,197 @@ static auto exception_handler = [](sycl::exception_list e_list) {
     }
 };
 
-
-void RenderFrame(queue& q, range<1> &num_items, Boids* boids)
+void Swap(IDPair* a, IDPair* b)
 {
-    q.submit([&](handler& h) {
+    IDPair t = *a;
+    *a = *b;
+    *b = t;
+}
 
-    h.parallel_for(num_items, [=](auto i) {
+int Partition(IDPair* particlesGrid, int low, int high)
+{
+    int pivot = particlesGrid[high].cellId;
+    int i = (low - 1);
+    for (int j = low; j <= high - 1; j++) {
+        if (particlesGrid[j].cellId < pivot) {
+            i++; // increment index of smaller element
+            Swap(&particlesGrid[i], &particlesGrid[j]);
+        }
+    }
+    Swap(&particlesGrid[i + 1], &particlesGrid[high]);
+    return (i + 1);
+}
+
+void QuickSort(IDPair* particlesGrid, int low, int high)
+{
+    if (low < high) {
+        int pi = Partition(particlesGrid, low, high);
+        QuickSort(particlesGrid, low, pi - 1);
+        QuickSort(particlesGrid, pi + 1, high);
+    }
+}
+
+int* CalculateCellIDList(Boids* boids, int i, int &n)
+{
+    int neighborID[9];
+    float x = boids->positions.x[i];
+    float y = boids->positions.y[i];
+    int row = y / visual_range;
+    int col = x / visual_range;
+    int cellID = col + row * cellsInRow;
+
+    neighborID[0] = cellID;
+    n = 1;
+
+    if(row-1>0 && col-1>0)    //left-top
+    {
+        neighborID[n] = cellID - cellsInRow - 1;
+        n++;
+    }
+    if (row - 1 > 0)    //top
+    {
+        neighborID[n] = cellID - cellsInRow;
+        n++;
+    }
+    if (row - 1 > 0 && col + 1 < cellsInRow)    //right-top
+    {
+        neighborID[n] = cellID - cellsInRow + 1;
+        n++;
+    }
+    if (col - 1 > 0)    //left
+    {
+        neighborID[n] = cellID - 1;
+        n++;
+    }
+    if (col + 1 < cellsInRow)    //right
+    {
+        neighborID[n] = cellID +1;
+        n++;
+    }
+    if (row + 1 < cellsInColumn && col -1 > 0)    //left-bottom
+    {
+        neighborID[n] = cellID + cellsInRow - 1;
+        n++;
+    }
+    if (row + 1 < cellsInColumn)    //bottom
+    {
+        neighborID[n] = cellID + cellsInRow;
+        n++;
+    }
+    if (row + 1 < cellsInColumn && col + 1 < cellsInRow)    //right-bottom
+    {
+        neighborID[n] = cellID + cellsInRow + 1;
+        n++;
+    }
+
+    return neighborID;
+}
+
+void RenderFrame(queue& q, Boids* boids, IDPair* particlesGrid, int* cellStart)
+{
+    // fill unordered list (id, cellid)
+    range<1> num_items{ boids_size };
+
+    q.submit([&](handler& h) {
+        h.parallel_for(num_items, [=](id<1> i) {
+            //int i = item.get_global_id();
+    float x = boids->positions.x[i];
+    float y = boids->positions.y[i];
+    //calc cell id
+    int row = y / visual_range;
+    int col = x / visual_range;
+    int cellId = col + row * cellsInRow;
+    particlesGrid[i].cellId = cellId;
+    particlesGrid[i].id = i;
+    cellStart[i] = -1;
+    });
+    });
+    q.wait();
+
+    QuickSort(particlesGrid, 0, boids_size - 1);
+
+    //RADIX SORT
+    //for (int i = 0; i < 1024; i++)
+    //    tab[i] = 0;
+    //for (int i = 0; i < boids_size; i++)
+    //    tab[particlesGrid[i].id]++;
+
+    //indexes->bits = 0;
+    //indexes->j = 1;
+
+    //int num_bits = countBits(cellsNum);
+    //for (; indexes->bits < num_bits - 1; indexes->j *= 2, indexes->bits++)
+    //{
+    //    int j = indexes->j;
+    //    q.parallel_for(num_items, [=](id<1> i) {
+    //        int result = ((particlesGrid[i].cellId & indexes->j) == 0 ? 0 : 1);
+    //    sortArrays->flags[i] = result;
+    //    sortArrays->I_down[i] = !result;
+    //    sortArrays->I_up[boids_size - i - 1] = result;
+    //        }).wait();
+
+    //        // I_down
+
+    //        q.single_task([=]() {sortArrays->I_down[boids_size - 1] = 0; });
+    //        for (indexes->d = log2(boids_size) - 1; indexes->d >= 0; indexes->d--)
+    //        {
+    //            int size = (boids_size - 1 / pow(2, indexes->d + 1));
+    //            range<1> items{ size };
+    //            q.parallel_for(items, [=](id<1> k) {
+    //                int d = indexes->d;
+    //            int t = sortArrays->I_down[k + (int)std::pow(2, d) - 1];
+    //            sortArrays->I_down[k + (int)std::pow(2, d) - 1] = sortArrays->I_down[k + (int)std::pow(2, d + 1) - 1];
+    //            sortArrays->I_down[k + (int)std::pow(2, d + 1) - 1] = t + sortArrays->I_down[k + (int)std::pow(2, d + 1) - 1];
+    //                }).wait();
+    //        }
+
+    //        // I_up
+    //        for (indexes->d = 0; indexes->d <= log2(boids_size) - 1; indexes->d++)
+    //        {
+    //            int size = (boids_size - 1) / (pow(2, indexes->d + 1));
+    //            range<1> items{ size };
+    //            q.parallel_for(items, [=](id<1> k) {
+    //                int d = indexes->d;
+    //            sortArrays->I_up[k + (int)std::pow(2, d + 1) - 1] = sortArrays->I_up[k + (int)std::pow(2, d) - 1] + sortArrays->I_up[k + (int)std::pow(2, d + 1) - 1];
+    //                }).wait();
+    //        }
+
+
+    //        q.parallel_for(num_items, [=](id<1> i) {
+    //            sortArrays->I_up[i] = boids_size - sortArrays->I_up[i];
+    //        particlesGridHelper[i].cellId = particlesGrid[i].cellId;
+    //        particlesGridHelper[i].id = particlesGrid[i].id;
+    //        if (sortArrays->flags[i])
+    //            sortArrays->index[i] = sortArrays->I_up[i];
+    //        else
+    //            sortArrays->index[i] = sortArrays->I_down[i];
+    //            }).wait();
+
+    //            q.parallel_for(num_items, [=](id<1> i) {
+    //                int index = sortArrays->index[i];
+    //            particlesGrid[index].cellId = particlesGridHelper[i].cellId;
+    //            particlesGrid[index].id = particlesGridHelper[i].id;
+    //                }).wait();
+    //}
+
+    range<1> num_items_reduced{ boids_size - 1 };
+
+    q.single_task([=]() {cellStart[particlesGrid[0].cellId] = 0; });
+    q.parallel_for(num_items_reduced, [=](id<1> i) {
+        if (particlesGrid[i + 1].cellId != particlesGrid[i].cellId)
+            cellStart[particlesGrid[i].cellId] = i;
+        }).wait();
+
+    q.parallel_for(num_items, [=](id<1> i) {
     float x = boids->positions.x[i];
     float y = boids->positions.y[i];
     float vx = boids->velocities.vx[i];
     float vy = boids->velocities.vy[i];
-
     auto distance = [&](float x1, float y1, float x2, float y2)
     {
         return sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
     };
     // NEW VELOCITY
-    // naive iteration
     float close_dx = 0.0f;
     float close_dy = 0.0f;
 
@@ -141,29 +339,41 @@ void RenderFrame(queue& q, range<1> &num_items, Boids* boids)
 
     unsigned int neighbors = 0;
 
-    for (int j = 0; j < boids_size; j++)
+    // process every neighbor cell
+    int n;
+    int* neighborCells = CalculateCellIDList(boids, i, n);
+
+    for (int counter = 0; counter < n; counter++)
     {
-        if (j == i) continue;
-        float friend_x = boids->positions.x[j];
-        float friend_y = boids->positions.y[j];
-        float dist = distance(x, y, friend_x, friend_y);
-        if (dist > visual_range)
-            continue;
-
-        float friend_vx = boids->velocities.vx[j];
-        float friend_vy = boids->velocities.vy[j];
-
-        if (dist < protected_range)
+        int cellNum = neighborCells[counter];
+        int particleNum = cellStart[cellNum];
+        while (particlesGrid[particleNum].cellId == cellNum)
         {
-            close_dx += x - friend_x;
-            close_dy += y - friend_y;
-            continue;
+            int j = particlesGrid[particleNum].id;
+            particleNum++;
+            if (j == i) continue;
+            float friend_x = boids->positions.x[j];
+            float friend_y = boids->positions.y[j];
+            float dist = distance(x, y, friend_x, friend_y);
+            if (dist > visual_range)
+                continue;
+
+            float friend_vx = boids->velocities.vx[j];
+            float friend_vy = boids->velocities.vy[j];
+
+            if (dist < protected_range)
+            {
+                close_dx += x - friend_x;
+                close_dy += y - friend_y;
+                continue;
+            }
+            neighbors++;
+            vx_avg += friend_vx;
+            vy_avg += friend_vy;
+            x_avg += friend_x;
+            y_avg += friend_y;
+
         }
-        neighbors++;
-        vx_avg += friend_vx;
-        vy_avg += friend_vy;
-        x_avg += friend_x;
-        y_avg += friend_y;
     }
 
     if (neighbors > 0)
@@ -234,7 +444,6 @@ void RenderFrame(queue& q, range<1> &num_items, Boids* boids)
     boids->trianglePositions[i].p2_y = new_y - vp_y;
     boids->trianglePositions[i].p3_x = new_x + vx * scale * 2.5;
     boids->trianglePositions[i].p3_y = new_y + vy * scale * 2.5;
-        });
         });
 }
 
@@ -359,7 +568,13 @@ int main(int argc, char* argv[]) {
     InitializeInput(cpu_boids);
 
     // Copy all buffers to GPU memory
-    Boids *gpu_boids = (Boids*)malloc_device(boids_size*10*sizeof(float), q);
+    IDPair* particlesGrid = (IDPair*)malloc_shared(boids_size * sizeof(IDPair), q);
+    Boids* gpu_boids = (Boids*)malloc_device(sizeof(Boids), q);
+    int* cellStart = (int*)malloc_device(boids_size* sizeof(int), q);
+
+    //Indexes* indexes = (Indexes*)malloc_shared(sizeof(Indexes), q);
+    //IDPair* particlesGridHelper = (IDPair*)malloc_shared(boids_size * sizeof(IDPair), q);
+     //SortArrays* sortArrays = (SortArrays*)malloc_shared(sizeof(SortArrays), q);
 
     q.submit([&](handler& h) {
         h.memcpy(gpu_boids, &cpu_boids, sizeof(Boids));}).wait();
@@ -380,7 +595,7 @@ int main(int argc, char* argv[]) {
 
         glClear(GL_COLOR_BUFFER_BIT);
         //schedule frame to render
-        RenderFrame(q, num_items, gpu_boids);
+        RenderFrame(q, gpu_boids, particlesGrid, cellStart);
         //draw
         glBufferData(GL_ARRAY_BUFFER, boids_size * sizeof(float)*6, &(cpu_boids.trianglePositions), GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLES, 0, boids_size * 3);
@@ -395,6 +610,9 @@ int main(int argc, char* argv[]) {
     glfwTerminate();
 
     free(gpu_boids, q);
-
+    free(particlesGrid, q);
+    free(cellStart);
+    //free(sortArrays, q);
+   // free(indexes, q);
     return 0;
 }
