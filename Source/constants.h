@@ -18,6 +18,7 @@ namespace
 	constexpr float kAlignFactor = 0.01f;
 	constexpr float kMaxSpeed = 1.2f;
 	constexpr float kMinSpeed = 0.9f;
+	constexpr float kMouseFactor = 0.1f;
 
 
 	constexpr float kWindowWidth = 1600.0f;  // 1920

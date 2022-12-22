@@ -166,13 +166,13 @@ int* CalculateCellIdList(Boids* boids, int i, int &n)
     return neighborID;
 }
 
-void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, Positions* temporaryPositions, Velocities* temporaryVelocities)
+void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, Positions* temporaryPositions, Velocities* temporaryVelocities, Point* mousePointer)
 {
     // Fill unordered list (id, cellid)
-    range<1> num_items{ kUnitCount };
+    range<1> numItems{ kUnitCount };
 
     q.submit([&](handler& h) {
-        h.parallel_for(num_items, [=](id<1> i) {
+        h.parallel_for(numItems, [=](id<1> i) {
     float x = boids->positions.x[i];
     float y = boids->positions.y[i];
     int row = y / kVisualRange;
@@ -201,7 +201,7 @@ void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, 
     //for (; indexes->bits < num_bits - 1; indexes->j *= 2, indexes->bits++)
     //{
     //    int j = indexes->j;
-    //    q.parallel_for(num_items, [=](id<1> i) {
+    //    q.parallel_for(numItems, [=](id<1> i) {
     //        int result = ((particlesGrid[i].cellId & indexes->j) == 0 ? 0 : 1);
     //    sortArrays->flags[i] = result;
     //    sortArrays->I_down[i] = !result;
@@ -235,7 +235,7 @@ void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, 
     //        }
 
 
-    //        q.parallel_for(num_items, [=](id<1> i) {
+    //        q.parallel_for(numItems, [=](id<1> i) {
     //            sortArrays->I_up[i] = kUnitCount - sortArrays->I_up[i];
     //        particlesGridHelper[i].cellId = particlesGrid[i].cellId;
     //        particlesGridHelper[i].id = particlesGrid[i].id;
@@ -245,23 +245,23 @@ void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, 
     //            sortArrays->index[i] = sortArrays->I_down[i];
     //            }).wait();
 
-    //            q.parallel_for(num_items, [=](id<1> i) {
+    //            q.parallel_for(numItems, [=](id<1> i) {
     //                int index = sortArrays->index[i];
     //            particlesGrid[index].cellId = particlesGridHelper[i].cellId;
     //            particlesGrid[index].id = particlesGridHelper[i].id;
     //                }).wait();
     //}
 
-    range<1> num_items_reduced{ kUnitCount - 1 };
+    range<1> numItemsReduced{ kUnitCount - 1 };
 
     // Fill cellStart array
     q.single_task([=]() {cellStart[particlesGrid[0].cellId] = 0; });
-    q.parallel_for(num_items_reduced, [=](id<1> i) {
+    q.parallel_for(numItemsReduced, [=](id<1> i) {
         if (particlesGrid[i + 1].cellId != particlesGrid[i].cellId)
             cellStart[particlesGrid[i].cellId] = i;
         }).wait();
 
-    q.parallel_for(num_items, [=](id<1> i) {
+    q.parallel_for(numItems, [=](id<1> i) {
     float x = boids->positions.x[i];
     float y = boids->positions.y[i];
     float vx = boids->velocities.vx[i];
@@ -271,8 +271,8 @@ void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, 
         return sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
     };
     // New velocity
-    float close_dx = 0.0f;
-    float close_dy = 0.0f;
+    float xAvoid = 0.0f;
+    float yAvoid = 0.0f;
 
     float vxAvg = 0.0f;
     float vyAvg = 0.0f;
@@ -306,8 +306,8 @@ void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, 
 
             if (dist < kProtectedRange)
             {
-                close_dx += x - xFriend;
-                close_dy += y - yFriend;
+                xAvoid += x - xFriend;
+                yAvoid += y - yFriend;
                 continue;
             }
             neighbors++;
@@ -318,6 +318,20 @@ void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, 
 
         }
     }
+    // Mouse pointer avoiding
+    int xMouse = mousePointer->x;
+    int yMouse = mousePointer->y;
+    int xMouseAvoid = 0;
+    int yMouseAvoid = 0;
+    float pointerDistance = distance(x, y, xMouse, yMouse);
+
+    if (pointerDistance < kVisualRange)
+    {
+        xMouseAvoid = x - xMouse;
+        yMouseAvoid = y - yMouse;
+    }
+    vx += xMouseAvoid * kMouseFactor;
+    vy += yMouseAvoid * kMouseFactor;
 
     if (neighbors > 0)
     {
@@ -335,8 +349,8 @@ void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, 
     }
 
     // Separation
-    vx += close_dx * kAvoidFactor;
-    vy += close_dy * kAvoidFactor;
+    vx += xAvoid * kAvoidFactor;
+    vy += yAvoid * kAvoidFactor;
 
 
     // Margin
@@ -388,7 +402,7 @@ void RenderFrame(queue& q, Boids* boids, IdPair* particlesGrid, int* cellStart, 
         }).wait();
 
     // Update position
-    q.parallel_for(num_items, [=](id<1> i) {
+    q.parallel_for(numItems, [=](id<1> i) {
     boids->positions.x[i] = temporaryPositions->x[i];
     boids->positions.y[i] = temporaryPositions->y[i];
     boids->velocities.vx[i] = temporaryVelocities->vx[i];
@@ -466,6 +480,7 @@ int main(int argc, char* argv[]) {
     Boids* gpuBoids = (Boids*)malloc_device(sizeof(Boids), q);
     Positions* temporaryPositions = (Positions*)malloc_device(sizeof(Positions), q);
     Velocities* temporaryVelocities = (Velocities*)malloc_device(sizeof(Velocities), q);
+    Point *mousePointer = (Point*)malloc_shared(sizeof(Point), q);
 
     int* cellStart = (int*)malloc_device(kUnitCount* sizeof(int), q);
 
@@ -477,6 +492,11 @@ int main(int argc, char* argv[]) {
 
     while (!glfwWindowShouldClose(window))
     {
+        double xpos, ypos;
+        glfwGetCursorPos(window, &xpos, &ypos);
+        mousePointer->x = xpos;
+        mousePointer->y = kWindowHeight - ypos;
+
         double currentTime = glfwGetTime();
         nbFrames++;
         if (currentTime - lastTime >= 1.0) {
@@ -492,7 +512,7 @@ int main(int argc, char* argv[]) {
 
         glClear(GL_COLOR_BUFFER_BIT);
         // schedule frame to render
-        RenderFrame(q, gpuBoids, particlesGrid, cellStart, temporaryPositions, temporaryVelocities);
+        RenderFrame(q, gpuBoids, particlesGrid, cellStart, temporaryPositions, temporaryVelocities, mousePointer);
         //draw
         glBufferData(GL_ARRAY_BUFFER, kUnitCount * sizeof(float)*6, &(cpuBoids.trianglePositions), GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLES, 0, kUnitCount * 3);
@@ -509,6 +529,7 @@ int main(int argc, char* argv[]) {
     free(particlesGrid, q);
     free(temporaryPositions, q);
     free(temporaryVelocities, q);
-    free(cellStart);
+    free(cellStart, q);
+    free(mousePointer, q);
     return 0;
 }
